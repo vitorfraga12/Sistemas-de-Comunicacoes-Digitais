@@ -1,5 +1,16 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.special import erfc
+
+
+def lin2dB(x):
+    return 10*np.log10(x)
+
+def dB2lin(x):
+    return 10**(x/10)
+
+def Qfunc(x):
+    return 0.5*erfc(x/np.sqrt(2))
 
 #####################################################################################################################################
 
@@ -119,7 +130,152 @@ def getQAM(bits: np.ndarray, m_order: int, c_distance: float):
 
 #####################################################################################################################################
 
+def getEnergy(symbols: np.ndarray):
+    ''' 
+    Calcula a energia média dos símbolos modulados.
+
+    Parâmetros:
+    - symbols (array): Símbolos modulados.
+
+    Retorna:
+    - energy (float): Energia média dos símbolos.
+    '''
+    return np.mean(np.abs(symbols)**2)
+
+#####################################################################################################################################
+
+def getMinDistance(symbols: np.ndarray):
+    ''' 
+    Calcula a menor distância entre os símbolos da constelação.
+
+    Parâmetros:
+    symbols (array): Símbolos modulados.
+
+    Retorna:
+    - min_distance (float): Menor distância entre os símbolos.
+    '''
+    distancias = []
+    for i in range(len(symbols)):
+        for j in range(i + 1, len(symbols)):
+            distancia = abs(symbols[i] - symbols[j])
+            distancias.append(distancia)
+    distancia_minima = min(distancias)
+    return distancia_minima
+
+#####################################################################################################################################
+
+def addAWGN(symbols: np.array, n_samples: int, snr: float, signal_energy: float):
+    ''' 
+    Adiciona ruído AWGN ao sinal modulado.
+
+    Parâmetros:
+    - symbols (array): Símbolos modulados.
+    - n_samples (int): Número de amostras do ruído.
+    - snr (float): Relação sinal-ruído em dB.
+    - signal_energy (float): Energia média dos símbolos.
+
+    Retorna:
+    - tx_signal (array): Sinal modulado com ruído AWGN.
+    '''
+    # Calculando a variância do ruído
+    noise_std_N0 = np.sqrt(signal_energy / (2 * dB2lin(snr))) # Desvio padrão do ruído
+    noise = np.random.normal(0, noise_std_N0, n_samples) + 1j * np.random.normal(0, noise_std_N0, n_samples) # Gerando ruído
+    tx_signal = symbols + noise # Adicionando o ruído ao sinal modulado
+    return tx_signal
+
+#####################################################################################################################################
+
+def TheoricalErrorProbMQAM(M: int, snr: float):
+    ''' 
+    Calcula a probabilidade de erro teórica de símbolo para M-QAM.
+
+    Parâmetros:
+    - M (int): Número de níveis na constelação.
+    - snr (float): Relação sinal-ruído em dB.
+
+    Retorna:
+    - error_prob (float): Probabilidade de erro de símbolo.
+    '''
+    sqrt_m = int(np.sqrt(M)) # Número de níveis em cada dimensão da constelação
+    if sqrt_m**2 != M:
+        raise ValueError("O número de níveis da constelação deve ser um quadrado perfeito.")
+    
+    # Cálculo da probabilidade de erro de símbolo para M-QAM
+    snr_lin = dB2lin(snr)
+
+    arg = np.sqrt((3*snr_lin)/(M-1))
+
+    term_1 = 4 * ( 1 - (1/np.sqrt(M)) ) * Qfunc(arg)
+    term_2 = 4 * ( 1 - (1/np.sqrt(M)) )**2 * Qfunc(arg)**2
+
+    error_prob = term_1 - term_2
+    return error_prob
+
+#####################################################################################################################################
+
+def slicer(rx_symbols: np.ndarray, constellation: np.ndarray):
+    """
+    Decodifica símbolos recebidos baseando-se na distância mínima até os símbolos da constelação.
+
+    Parâmetros:
+    - received_symbols (array): Símbolos recebidos no canal AWGN.
+    - constellation (array): Símbolos da constelação M-QAM.
+
+    Retorna:
+    - decoded_symbols (array): Símbolos decodificados correspondentes aos mais próximos na constelação.
+    """
+    decoded_symbols = []
+    for sym in rx_symbols:
+        # Calcula a distância euclidiana entre o símbolo recebido e todos os símbolos da constelação
+        distances = np.abs(sym - constellation)
+        # Seleciona o símbolo da constelação com a menor distância
+        min_index = np.argmin(distances)
+        decoded_symbols.append(constellation[min_index])
+    return np.array(decoded_symbols)
 
 
+#####################################################################################################################################
 
+def getSERandBER(bits: np.ndarray, M_order:int ,snr: np.ndarray, c_distance=1):
+    """
+    Calcula a SER e BER simuladas para M-QAM em um canal AWGN.
+
+    Parâmetros:
+    - bits (array): Sequência de bits a ser transmitida.
+    - M_order (int): Ordem da constelação M-QAM.
+    - snr (array): Faixa de valores de SNR em dB.
+    - c_distance (float): Distância mínima entre níveis da constelação.
+
+    Retorna:
+    - SER (list): Taxa de erro de símbolo simulada.
+    - BER (list): Taxa de erro de bit simulada.
+    """
+
+    n_bits_per_symbol = int(np.log2(M_order))
+    num_symbols = len(bits) // n_bits_per_symbol
+
+    # Gerando a constelação M-QAM
+    symbols, gray_labels = getQAM(bits, M_order, c_distance)
+    constellation = np.unique(symbols)
+    signal_energy = getEnergy(symbols) # Calculando a energia média dos símbolos
+
+    SER = []   
+    BER = []
+
+    for snr_value in snr:
+        # Adicionando ruído AWGN ao sinal modulado
+        symbols_rx = addAWGN(symbols, num_symbols, snr_value, signal_energy)
+
+        # Decodificando os símbolos recebidos
+        decoded_symbols = slicer(symbols_rx, constellation)
+
+        # Obtendo a quantidade de erros de símbolo
+        error_symbols = np.sum(symbols != decoded_symbols)
+        SER.append(error_symbols / num_symbols)
+
+        # Obtendo a quantidade de erros de bit
+        error_bits = error_symbols * n_bits_per_symbol
+        BER.append(error_bits / len(bits))
+
+    return SER, BER
 
