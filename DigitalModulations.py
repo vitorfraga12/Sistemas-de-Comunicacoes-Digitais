@@ -4,13 +4,13 @@ from scipy.special import erfc
 
 
 def lin2dB(x):
-    return 10*np.log10(x)
+    return 10*np.log10(x) # Converte a escala linear para dB
 
 def dB2lin(x):
-    return 10**(x/10)
+    return 10**(x/10) # Converte a escala dB para linear
 
 def Qfunc(x):
-    return 0.5*erfc(x/np.sqrt(2))
+    return 0.5*erfc(x/np.sqrt(2)) # Gera a função Q a partir da função erro complementar
 
 #####################################################################################################################################
 
@@ -130,6 +130,55 @@ def getQAM(bits: np.ndarray, m_order: int, c_distance: float):
 
 #####################################################################################################################################
 
+# Função para a constelação M-PSK
+
+def getPSK(bits: np.ndarray, m_order: int):
+    """
+    Realiza a modulação M-PSK com codificação Gray.
+
+    Parâmetros:
+    - bits (array): Sequência de bits a ser modulada.
+    - m_order (int): Número de níveis na constelação (M-PSK).
+
+    Retorna:
+    - symbols (array): Símbolos modulados em M-PSK.
+    - gray_labels (list): Lista de códigos Gray correspondentes a cada símbolo.
+    """
+    if not np.log2(m_order).is_integer():
+        raise ValueError("O número de níveis da constelação deve ser uma potência de 2.")
+    
+    # Número de bits por símbolo
+    K_BitsPerSymbol = int(np.log2(m_order))
+    if len(bits) % K_BitsPerSymbol != 0:
+        raise ValueError("O número de bits deve ser múltiplo de log2(M).")
+    
+    # Gerando o código Gray usando a função getGrayCode
+    gray_codes = getGrayCode(m_order)
+    
+    # Gerando os símbolos M-PSK
+    phases = np.linspace(0, 360, m_order, endpoint=False)  # Ângulos uniformemente distribuídos
+    phases = np.radians(phases)  # Convertendo para radianos
+    psk_symbols = np.exp(1j * phases)  # Símbolos no círculo unitário
+
+    # Mapeando os códigos Gray para símbolos
+    mapping = {gray_codes[i]: psk_symbols[i] for i in range(m_order)}
+
+    # Modulação
+    symbols = []
+    gray_labels = {} 
+    for i in range(0, len(bits), K_BitsPerSymbol):
+        bit_chunk = int("".join(map(str, bits[i:i + K_BitsPerSymbol])), 2)  # Bits como inteiro
+        gray_label = gray_codes[bit_chunk]  # Código Gray
+        symbol = mapping[gray_label]  # Símbolo correspondente na constelação PSK
+        
+        symbols.append(symbol)
+        gray_labels[symbol] = format(gray_label, f'0{K_BitsPerSymbol}b')  # Código Gray como string binária
+    
+    return np.array(symbols), gray_labels
+
+
+#####################################################################################################################################
+
 def getEnergy(symbols: np.ndarray):
     ''' 
     Calcula a energia média dos símbolos modulados.
@@ -140,6 +189,7 @@ def getEnergy(symbols: np.ndarray):
     Retorna:
     - energy (float): Energia média dos símbolos.
     '''
+    
     return np.mean(np.abs(symbols)**2)
 
 #####################################################################################################################################
@@ -154,13 +204,18 @@ def getMinDistance(symbols: np.ndarray):
     Retorna:
     - min_distance (float): Menor distância entre os símbolos.
     '''
-    distancias = []
-    for i in range(len(symbols)):
-        for j in range(i + 1, len(symbols)):
-            distancia = abs(symbols[i] - symbols[j])
-            distancias.append(distancia)
-    distancia_minima = min(distancias)
-    return distancia_minima
+    # Vendo quais os símbolos únicos na constelação
+    unique_symbols = np.unique(symbols)
+
+    # Calcula a matriz de distâncias entre todos os pares de símbolos
+    dist_matrix = np.abs(unique_symbols[:, None] - unique_symbols[None, :])
+    
+    # Exclui os valores diagonais (auto-distâncias iguais a 0)
+    dist_matrix[dist_matrix == 0] = np.inf
+
+    # Retorna a menor distância encontrada
+    d_min = np.min(dist_matrix)
+    return d_min
 
 #####################################################################################################################################
 
@@ -177,7 +232,7 @@ def addAWGN(symbols: np.array, n_samples: int, snr: float, signal_energy: float)
     Retorna:
     - tx_signal (array): Sinal modulado com ruído AWGN.
     '''
-    # Calculando a variância do ruído
+    # Calculando o desvio padrão do ruído
     noise_std_N0 = np.sqrt(signal_energy / (2 * dB2lin(snr))) # Desvio padrão do ruído
     noise = np.random.normal(0, noise_std_N0, n_samples) + 1j * np.random.normal(0, noise_std_N0, n_samples) # Gerando ruído
     tx_signal = symbols + noise # Adicionando o ruído ao sinal modulado
@@ -213,6 +268,30 @@ def TheoricalErrorProbMQAM(M: int, snr: float):
 
 #####################################################################################################################################
 
+def TheoricalErrorProbMPSK(M: int, snr: float):
+    ''' 
+    Calcula a probabilidade de erro teórica de símbolo para M-PSK.
+
+    Parâmetros:
+    - M (int): Número de níveis na constelação.
+    - snr (float): Relação sinal-ruído em dB.
+
+    Retorna:
+    - error_prob (float): Probabilidade de erro de símbolo.
+    '''
+
+    # Cálculo da probabilidade de erro de símbolo para M-PSK
+    snr_lin = dB2lin(snr)
+
+    arg = np.sqrt(2 * snr_lin) * np.sin(np.pi / M) # Argumento da Q-function
+
+    error_prob = 2 * Qfunc(arg)
+
+    return error_prob
+
+
+#####################################################################################################################################
+
 def slicer(rx_symbols: np.ndarray, constellation: np.ndarray):
     """
     Decodifica símbolos recebidos baseando-se na distância mínima até os símbolos da constelação.
@@ -236,7 +315,7 @@ def slicer(rx_symbols: np.ndarray, constellation: np.ndarray):
 
 #####################################################################################################################################
 
-def getSERandBER(bits: np.ndarray, M_order:int ,snr: np.ndarray, c_distance=1):
+def getSERandBER(bits: np.ndarray, M_order:int ,snr: np.ndarray, modulation_type: str ,c_distance=1):
     """
     Calcula a SER e BER simuladas para M-QAM em um canal AWGN.
 
@@ -245,6 +324,7 @@ def getSERandBER(bits: np.ndarray, M_order:int ,snr: np.ndarray, c_distance=1):
     - M_order (int): Ordem da constelação M-QAM.
     - snr (array): Faixa de valores de SNR em dB.
     - c_distance (float): Distância mínima entre níveis da constelação.
+    - modulation_type (str): Tipo de modulação (QAM, PSK, PAM).
 
     Retorna:
     - SER (list): Taxa de erro de símbolo simulada.
@@ -254,8 +334,14 @@ def getSERandBER(bits: np.ndarray, M_order:int ,snr: np.ndarray, c_distance=1):
     n_bits_per_symbol = int(np.log2(M_order))
     num_symbols = len(bits) // n_bits_per_symbol
 
-    # Gerando a constelação M-QAM
-    symbols, gray_labels = getQAM(bits, M_order, c_distance)
+    # Gerando a constelação com base no tipo de modulação
+    if modulation_type.upper() == 'QAM':
+        symbols, gray_labels = getQAM(bits, M_order, c_distance)
+    elif modulation_type.upper() == 'PSK':
+        symbols, gray_labels = getPSK(bits, M_order)
+    else:
+        raise ValueError("Tipo de modulação inválido. Use 'QAM' ou 'PSK'.")
+
     constellation = np.unique(symbols)
     signal_energy = getEnergy(symbols) # Calculando a energia média dos símbolos
 
