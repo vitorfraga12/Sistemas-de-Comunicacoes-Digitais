@@ -481,10 +481,11 @@ def symbols_to_bits(symbols, constellation, m_order):
     return np.array(bits)  # Retorna a sequência de bits como um array
 
 ####################################################################################################################################################################################
+import numpy as np
 
 def phase_correction(symbols_rx, constellation):
     """
-    Estima e corrige o desvio de fase dos símbolos recebidos.
+    Estima e corrige o desvio de fase dos símbolos recebidos usando uma média ponderada para maior precisão.
 
     Parâmetros:
     - symbols_rx (array): Símbolos recebidos no canal.
@@ -492,15 +493,52 @@ def phase_correction(symbols_rx, constellation):
 
     Retorna:
     - symbols_corrected (array): Símbolos corrigidos.
-    - estimated_phase (float): Fase estimada.
+    - estimated_phase (float): Fase estimada no intervalo [0, 2π].
     """
-    # Estimando o desvio de fase médio
-    estimated_phase = np.angle(np.mean(symbols_rx * np.conj(constellation)))
+    # Obtendo apenas os símbolos únicos da constelação
+    unique_constellation = np.unique(constellation)
 
-    # Corrigindo a fase dos símbolos recebidos
+    # Obtendo as fases dos símbolos recebidos e da constelação
+    phases_rx = np.angle(symbols_rx)
+    phases_constellation = np.angle(unique_constellation)
+
+    phase_differences = []
+    weights = []
+
+    # Comparação individual para evitar grandes matrizes (mais eficiente)
+    for phase_rx in phases_rx:
+        # Calcula a diferença de fase para cada símbolo recebido em relação à constelação
+        phase_diff = np.abs(phase_rx - phases_constellation)
+        phase_diff = (phase_diff + np.pi) % (2 * np.pi) - np.pi  # Ajusta para intervalo [-π, π]
+
+        # Encontra a menor diferença de fase
+        min_diff = np.min(phase_diff)
+        phase_differences.append(min_diff)
+
+        # Define um peso inversamente proporcional à diferença de fase (quanto menor a diferença, maior o peso)
+        weight = np.exp(-min_diff)  # Ponderação exponencial para dar mais peso às estimativas confiáveis
+        weights.append(weight)
+
+    # Convertendo para numpy arrays
+    phase_differences = np.array(phase_differences)
+    weights = np.array(weights)
+
+    # Normalizando os pesos
+    weights /= np.sum(weights)
+
+    # Calculando a estimativa da fase como uma média ponderada
+    estimated_phase = np.sum(weights * phase_differences)
+
+    # Ajusta para o intervalo [0, 2π]
+    estimated_phase = (estimated_phase + 2 * np.pi) % (2 * np.pi)
+
+    # Corrige a fase dos símbolos recebidos
     symbols_corrected = symbols_rx * np.exp(-1j * estimated_phase)
 
     return symbols_corrected, estimated_phase
+
+
+
 
 ########################################################################################################################################################
 
