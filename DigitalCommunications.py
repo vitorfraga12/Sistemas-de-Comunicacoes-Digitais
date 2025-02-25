@@ -12,8 +12,8 @@ def dB2lin(x):
 def Qfunc(x):
     return 0.5*erfc(x/np.sqrt(2)) # Gera a função Q a partir da função erro complementar
 
-#####################################################################################################################################
-#####################################################################################################################################
+
+####################################################################################################################################################################################
 
 # Função para gerar a codificação de Gray
 def getGrayCode(M_order):
@@ -413,3 +413,244 @@ def getSERandBER_defined(bits: np.ndarray, M_order:int ,snr: np.ndarray, constel
         BER.append(error_bits / len(bits))
 
     return SER, BER, symbols_rx
+
+####################################################################################################################################################################################
+
+def map_region(x_i, x_j, prob_xi, prob_xj, var):
+    """
+    Detector de Máxima a Posteriori (MAP) para sinais recebidos.
+
+    Parâmetros:
+    - x_i (complex): Símbolo de comparação.
+    - x_j (complex): Outro símbolo de comparação.
+    - prob_xi (float): Probabilidade de ocorrência do símbolo x_i.
+    - prob_xj (float): Probabilidade de ocorrência do símbolo x_j.
+    - var (float): Variância do ruído.
+
+    Retorna:
+    - float: Valor da equação de decisão.
+    """
+    # Primeiro termo da equação obtida
+    prim_term = (x_i**2 - x_j**2) / (2 * (x_i - x_j))
+    
+    # Segundo termo da equação obtida
+    segun_term = (var / (x_i - x_j)) * (np.log(prob_xj / prob_xi))
+    
+    return prim_term + segun_term
+
+####################################################################################################################################################################################
+
+def apply_phase_offset(signal, phase_offset):
+    '''
+    Aplica um desvio de fase constante ao sinal recebido.
+
+    Parâmetros:
+    - signal (array): Sinal modulado recebido.
+    - phase_offset (float): Desvio de fase em radianos.
+
+    Retorna:
+    - signal_with_phase (array): Sinal com desvio de fase aplicado.
+    '''
+    return signal * np.exp(1j * phase_offset)  # Multiplicação por um fator exponencial para rotacionar a fase
+
+####################################################################################################################################################################################
+
+def symbols_to_bits(symbols, constellation, m_order):
+    '''
+    Converte símbolos demodulados em uma sequência de bits utilizando o mapeamento Gray.
+
+    Parâmetros:
+    - symbols (array): Símbolos demodulados.
+    - constellation (array): Conjunto de símbolos da constelação QPSK.
+    - m_order (int): Ordem da modulação M-PSK.
+
+    Retorna:
+    - bits (array): Sequência de bits decodificados a partir dos símbolos.
+    '''
+    gray_codes = getGrayCode(m_order)  # Gera a sequência de códigos Gray
+    bits_per_symbol = int(np.log2(m_order))  # Número de bits por símbolo
+    bits = []
+
+    for sym in symbols:
+        distances = np.abs(sym - constellation)  # Calcula a distância euclidiana em relação à constelação
+        closest_symbol_index = np.argmin(distances)  # Encontra o símbolo mais próximo
+        gray_code = gray_codes[closest_symbol_index]  # Obtém o código Gray correspondente
+        bits_chunk = list(format(gray_code, f'0{bits_per_symbol}b'))  # Converte o código Gray para uma sequência binária
+        bits.extend([int(bit) for bit in bits_chunk])  # Adiciona os bits convertidos à lista
+
+    return np.array(bits)  # Retorna a sequência de bits como um array
+
+####################################################################################################################################################################################
+
+def phase_correction(symbols_rx, constellation):
+    """
+    Estima e corrige o desvio de fase dos símbolos recebidos.
+
+    Parâmetros:
+    - symbols_rx (array): Símbolos recebidos no canal.
+    - constellation (array): Símbolos ideais da constelação.
+
+    Retorna:
+    - symbols_corrected (array): Símbolos corrigidos.
+    - estimated_phase (float): Fase estimada.
+    """
+    # Estimando o desvio de fase médio
+    estimated_phase = np.angle(np.mean(symbols_rx * np.conj(constellation)))
+
+    # Corrigindo a fase dos símbolos recebidos
+    symbols_corrected = symbols_rx * np.exp(-1j * estimated_phase)
+
+    return symbols_corrected, estimated_phase
+
+########################################################################################################################################################
+
+def getSERandBER_without_awgn(bits: np.ndarray, M_order:int ,snr: np.ndarray, constellation_values: np.ndarray):
+    """
+    Calcula a SER e BER simuladas para M-QAM em um canal sem ruído.
+
+    Parâmetros:
+    - bits (array): Sequência de bits a ser transmitida.
+    - M_order (int): Ordem da constelação M-QAM.
+    - snr (array): Faixa de valores de SNR em dB.
+    - c_distance (float): Distância mínima entre níveis da constelação.
+    - constellation_values (array): Valores da constelação.
+
+    Retorna:
+    - SER (list): Taxa de erro de símbolo simulada.
+    - BER (list): Taxa de erro de bit simulada.
+    """
+
+    n_bits_per_symbol = int(np.log2(M_order))
+    num_symbols = len(bits) // n_bits_per_symbol
+
+    symbols = constellation_values
+
+    constellation = np.unique(symbols)
+
+    SER = []   
+    BER = []
+
+    for snr_value in snr:
+        # Agora sim, passa os símbolos modulados corretamente para addAWGN
+        symbols_rx = symbols
+
+        # Decodificando os símbolos recebidos
+        decoded_symbols = slicer(symbols_rx, constellation)
+
+        # Obtendo a quantidade de erros de símbolo
+        error_symbols = np.sum(symbols != decoded_symbols)
+        SER.append(error_symbols / num_symbols)
+
+        # Obtendo a quantidade de erros de bit
+        error_bits = error_symbols * n_bits_per_symbol
+        BER.append(error_bits / len(bits))
+
+    return SER, BER, symbols_rx
+
+####################################################################################################################################################################################
+
+def getSERandBER_withphase(bits: np.ndarray, M_order:int ,snr: np.ndarray, modulation_type: str , phase: float,c_distance=1):
+    """
+    Calcula a SER e BER simuladas para M-QAM em um canal AWGN.
+
+    Parâmetros:
+    - bits (array): Sequência de bits a ser transmitida.
+    - M_order (int): Ordem da constelação M-QAM.
+    - snr (array): Faixa de valores de SNR em dB.
+    - c_distance (float): Distância mínima entre níveis da constelação.
+    - modulation_type (str): Tipo de modulação (QAM, PSK, PAM).
+    - phase (float): Desvio de fase em radianos
+
+    Retorna:
+    - SER (list): Taxa de erro de símbolo simulada.
+    - BER (list): Taxa de erro de bit simulada.
+    """
+
+    n_bits_per_symbol = int(np.log2(M_order))
+    num_symbols = len(bits) // n_bits_per_symbol
+
+    # Gerando a constelação com base no tipo de modulação
+    if modulation_type.upper() == 'QAM':
+        symbols, gray_labels = getQAM(bits, M_order, c_distance)
+    elif modulation_type.upper() == 'PSK':
+        symbols, gray_labels = getPSK(bits, M_order)
+    else:
+        raise ValueError("Tipo de modulação inválido. Use 'QAM' ou 'PSK'.")
+
+    constellation = np.unique(symbols)
+    signal_energy = getEnergy(symbols) # Calculando a energia média dos símbolos
+
+    SER = []   
+    BER = []
+
+    for snr_value in snr:
+        # Adicionando ruído AWGN ao sinal modulado
+        symbols_rx = (addAWGN(symbols, num_symbols, snr_value, signal_energy))*np.exp(1j*phase)
+
+        # Decodificando os símbolos recebidos
+        decoded_symbols = slicer(symbols_rx, constellation)
+
+        # Obtendo a quantidade de erros de símbolo
+        error_symbols = np.sum(symbols != decoded_symbols)
+        SER.append(error_symbols / num_symbols)
+
+        # Obtendo a quantidade de erros de bit
+        error_bits = error_symbols * n_bits_per_symbol
+        BER.append(error_bits / len(bits))
+
+    return SER, BER
+
+
+def getSERandBER_withphase_estimation(bits: np.ndarray, M_order:int, snr: np.ndarray, modulation_type: str, phase: float, c_distance=1):
+    """
+    Calcula SER e BER aplicando correção de fase com o estimador definido.
+
+    Parâmetros:
+    - bits (array): Sequência de bits a ser transmitida.
+    - M_order (int): Ordem da constelação M-PSK.
+    - snr (array): Faixa de valores de SNR em dB.
+    - modulation_type (str): Tipo de modulação (QAM, PSK, PAM).
+    - phase (float): Desvio de fase em radianos.
+
+    Retorna:
+    - SER (list): Taxa de erro de símbolo simulada.
+    - BER (list): Taxa de erro de bit simulada.
+    """
+
+    n_bits_per_symbol = int(np.log2(M_order))
+    num_symbols = len(bits) // n_bits_per_symbol
+
+    # Gerando a constelação com base no tipo de modulação
+    if modulation_type.upper() == 'QAM':
+        symbols, gray_labels = getQAM(bits, M_order, c_distance)
+    elif modulation_type.upper() == 'PSK':
+        symbols, gray_labels = getPSK(bits, M_order)
+    else:
+        raise ValueError("Tipo de modulação inválido. Use 'QAM' ou 'PSK'.")
+
+    constellation = np.unique(symbols)
+    signal_energy = getEnergy(symbols)
+
+    SER = []
+    BER = []
+
+    for snr_value in snr:
+        # Adicionando ruído AWGN com desvio de fase
+        symbols_rx = addAWGN(symbols, num_symbols, snr_value, signal_energy) * np.exp(1j * phase)
+
+        symbols_corrected, estimated_phase = phase_correction(symbols_rx, symbols)
+
+
+        # Decodificando os símbolos corrigidos
+        decoded_symbols = slicer(symbols_corrected, constellation)
+
+        # Calculando SER
+        error_symbols = np.sum(symbols != decoded_symbols)
+        SER.append(error_symbols / num_symbols)
+
+        # Calculando BER
+        decoded_bits = symbols_to_bits(decoded_symbols, constellation, M_order)
+        error_bits = np.sum(bits != decoded_bits)
+        BER.append(error_bits / len(bits))
+
+    return SER, BER
